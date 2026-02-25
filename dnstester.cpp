@@ -28,14 +28,113 @@
 #include <ctime>
 #include <errno.h>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <limits.h>
 #include <net/if.h>
 #include <sstream>
+#include <stdexcept>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+std::vector<uint8_t> serializeDnsQuery(const std::string &name,
+                                          uint16_t qtype) {
+  uint8_t buf[UDP_MAX_LEN];
+  memset(buf, 0x00, sizeof(buf));
+
+  // Header
+  DNSHeader *header = reinterpret_cast<DNSHeader *>(buf);
+  header->id(0);  // TX ID placeholder
+  header->qr(0);
+  header->opcode(DNSHeader::OpCode::Query);
+  header->aa(false);
+  header->tc(false);
+  header->rd(true);
+  header->ra(false);
+  header->rcode(DNSHeader::RCODE::NoError);
+  header->qdcount(1);
+  header->ancount(0);
+  header->nscount(0);
+  header->arcount(0);
+
+  // QNAME encoding
+  uint8_t *p = buf + sizeof(DNSHeader);
+  uint8_t *end = buf + sizeof(buf);
+
+  // Append trailing '.' if not present
+  std::string fqdn = name;
+  if (fqdn.empty() || fqdn.back() != '.') fqdn += '.';
+
+  // Use a local char array for strtok
+  char tmp[512];
+  if (fqdn.size() >= sizeof(tmp))
+    throw std::runtime_error{"DNS name too long: " + name};
+  memcpy(tmp, fqdn.c_str(), fqdn.size() + 1);
+
+  char *label = strtok(tmp, ".");
+  while (label != nullptr) {
+    size_t lblen = strlen(label);
+    if (lblen > 63)
+      throw std::runtime_error{"Label too long in: " + name};
+    if (p + 1 + lblen + 4 > end)  // +4 for qtype+qclass
+      throw std::runtime_error{"DNS name too long to fit in UDP packet: " +
+                               name};
+    *p = static_cast<uint8_t>(lblen);
+    p += 1;
+    memcpy(p, label, lblen);
+    p += lblen;
+    label = strtok(nullptr, ".");
+  }
+  *p = 0x00;  // root label
+  p += 1;
+
+  // QTYPE and QCLASS
+  *reinterpret_cast<uint16_t *>(p) = htons(qtype);
+  p += sizeof(uint16_t);
+  *reinterpret_cast<uint16_t *>(p) = htons(QClass::IN);
+  p += sizeof(uint16_t);
+
+  size_t len = static_cast<size_t>(p - buf);
+  return std::vector<uint8_t>(buf, buf + len);
+}
+
+std::vector<QueryFileEntry> loadQueryFile(const std::string &path) {
+  std::ifstream f(path);
+  if (!f)
+    throw std::runtime_error{"Cannot open query file: " + path};
+  std::vector<QueryFileEntry> result;
+  std::string line;
+  size_t lineno = 0;
+  while (std::getline(f, line)) {
+    ++lineno;
+    // strip trailing \r for Windows line endings
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    // skip blanks and comments
+    if (line.empty() || line[0] == '#') continue;
+
+    std::istringstream ss(line);
+    std::string name, typestr;
+    if (!(ss >> name >> typestr)) {
+      throw std::runtime_error{"Query file parse error at line " +
+                               std::to_string(lineno)};
+    }
+    uint16_t qtype;
+    if (!parseQType(typestr, &qtype)) {
+      throw std::runtime_error{"Unknown QType '" + typestr + "' at line " +
+                               std::to_string(lineno)};
+    }
+    QueryFileEntry entry;
+    entry.name = name;
+    entry.qtype = qtype;
+    entry.packet = serializeDnsQuery(name, qtype);
+    result.push_back(std::move(entry));
+  }
+  if (result.empty())
+    throw std::runtime_error{"Query file is empty: " + path};
+  return result;
+}
 
 TestException::TestException(std::string what) : what_{what} {}
 
@@ -51,13 +150,13 @@ DnsTester::DnsTester(
 #else
     struct in6_addr server_addr,
 #endif
-    uint16_t port, uint32_t ip, uint8_t netmask, uint32_t num_req,
-    uint32_t num_burst, uint32_t num_thread, uint32_t thread_id,
-    uint16_t num_ports,
+    uint16_t port, const std::vector<QueryFileEntry> *queries,
+    uint32_t num_req, uint32_t num_burst, uint32_t num_thread,
+    uint32_t thread_id, uint16_t num_ports,
     const std::chrono::time_point<std::chrono::high_resolution_clock>
         &test_start_time,
     std::chrono::nanoseconds burst_delay, struct timeval timeout)
-    : ip_{ip}, netmask_{netmask}, num_req_{num_req / num_thread},
+    : queries_{queries}, num_req_{num_req / num_thread},
       num_burst_{num_burst}, num_thread_{num_thread}, thread_id_{thread_id},
       test_start_time_{test_start_time}, burst_delay_{burst_delay}, num_sent_{
                                                                         0} {
@@ -65,8 +164,8 @@ DnsTester::DnsTester(
   answer_data_.resize(UDP_MAX_LEN);
   /* Set timeout */
   timeout_ = timeout;
-  /* Calculate offset */
-  num_offset_ = thread_id_ * num_req_;
+  /* Calculate query start index */
+  query_start_ = thread_id_ * num_req_;
   /* Fill server sockaddr structure */
   memset(&server_, 0x00, sizeof(server_));
 #ifdef DNS64PERFPP_IPV4
@@ -159,76 +258,38 @@ DnsTester::DnsTester(
     tests_.push_back(DnsQuery{
         static_cast<uint16_t>(i % (num_ports == 0U ? 1U : num_ports))});
   }
-  /* Creating the base query */
-  memset(query_data_, 0x00, sizeof(query_data_));
-  /* Filling the header */
-  DNSHeader *header = reinterpret_cast<DNSHeader *>(query_data_);
-  header->id(0);
-  header->qr(0);
-  header->opcode(DNSHeader::OpCode::Query);
-  header->aa(false);
-  header->tc(false);
-  header->rd(true);
-  header->ra(false);
-  header->rcode(DNSHeader::RCODE::NoError);
-  header->qdcount(1);
-  header->ancount(0);
-  header->nscount(0);
-  header->arcount(0);
-  /* Creating the question*/
-  uint8_t *question = query_data_ + sizeof(DNSHeader);
-  /* Creating the domain name */
-  char addr[64];
-  char query_addr[512];
-  snprintf(addr, sizeof(addr), dns64_addr_format_string, 0, 0, 0, 0);
-  snprintf(query_addr, sizeof(query_addr), "%s.%s.", addr, dns64_addr_domain);
-  /* Convering the domain name to DNS Name format */
-  char *label = strtok(query_addr, ".");
-  while (label != nullptr) {
-    *question = strlen(label);
-    question += 1;
-    memcpy(question, label, strlen(label));
-    question += strlen(label);
-    label = strtok(nullptr, ".");
-  }
-  *question = 0x00;
-  question += 1;
-  /* Setting the query type and class */
-  *reinterpret_cast<uint16_t *>(question) = htons(QType::AAAA);
-  question += sizeof(uint16_t);
-  *reinterpret_cast<uint16_t *>(question) = htons(QClass::IN);
-  question += sizeof(uint16_t);
-  /* Constructing the DnsQuery */
-  size_t len = (size_t)(question - query_data_);
-  query_ = std::unique_ptr<DNSPacket>{
-      new DNSPacket{query_data_, len, sizeof(query_data_)}};
 }
 
 void DnsTester::test() {
   for (uint32_t i = 0; i < num_burst_; i++) {
     /* Get query store */
     DnsQuery &query = tests_[num_sent_];
-    /* Modify the base query */
-    /* Modify the label */
-    char label[64];
-    uint32_t ip = ip_ | (num_sent_ + num_offset_);
-    snprintf(label, sizeof(label), dns64_addr_format_string, (ip >> 24) & 0xff,
-             (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
-    memcpy(query_->labels_[0].begin_ + 1, label, strlen(label));
-    /* Modify the Transaction ID */
-    query_->header_->id((num_sent_ + num_offset_) % (1 << 16));
+
+    /* Select the entry from the global list (cycling with modulo) */
+    const QueryFileEntry &entry =
+        (*queries_)[(query_start_ + num_sent_) % queries_->size()];
+
+    /* Copy pre-serialized packet into the send buffer */
+    size_t pkt_len = entry.packet.size();
+    memcpy(query_data_, entry.packet.data(), pkt_len);
+
+    /* Patch the TX ID in-place */
+    reinterpret_cast<DNSHeader *>(query_data_)
+        ->id(static_cast<uint16_t>(num_sent_));
+
     /* Send the query */
     ssize_t sent;
     while ((sent = ::sendto(sockets_[query.socket_index_],
-                            reinterpret_cast<const void *>(query_->begin_),
-                            query_->len_, 0,
+                            reinterpret_cast<const void *>(query_data_),
+                            pkt_len, 0,
                             reinterpret_cast<const struct sockaddr *>(&server_),
-                            sizeof(server_))) != query_->len_) {
+                            sizeof(server_))) != static_cast<ssize_t>(pkt_len)) {
       if (errno != EAGAIN && errno != EWOULDBLOCK) {
         std::cerr << "Can't send packet." << std::endl;
         break;
       }
     }
+
     /* Store the time */
     query.time_sent_ = std::chrono::high_resolution_clock::now();
     m_.lock();
@@ -287,25 +348,13 @@ inline void DnsTester::receive(uint16_t socket_index) {
       /* It is invalid */
       return;
     }
-    /* Find the corresponding query */
-    char label[64];
-    uint32_t ip;
-    uint8_t temp[4];
-    strncpy(label, (const char *)answer.labels_[0].begin_ + 1,
-            answer.labels_[0].length());
-    label[answer.labels_[0].length()] = '\0';
-    if (sscanf(label, dns64_addr_format_string, temp, temp + 1, temp + 2,
-               temp + 3) != 4) {
-      throw TestException{"Invalid question."};
+    /* Find the corresponding query using TX ID */
+    uint16_t tx_id = answer.header_->id();
+    if (tx_id >= num_req_) {
+      /* TX ID out of range for this thread — discard (stale or misrouted) */
+      return;
     }
-    ip = (temp[0] << 24) | (temp[1] << 16) | (temp[2] << 8) | temp[3];
-    auto fqdn = ip & (((uint64_t)1 << (32 - netmask_)) - 1);
-    if (fqdn < num_offset_) {
-      throw TestException{"Unexpected FQDN in question: too small."};
-    } else if (fqdn >= (num_offset_ + num_req_)) {
-      throw TestException{"Unexpected FQDN in question: too large."};
-    }
-    DnsQuery &query = tests_[fqdn - num_offset_];
+    DnsQuery &query = tests_[tx_id];
     /* Set the received flag true */
     query.received_ = true;
     /* Set the received timestamp */
@@ -482,20 +531,17 @@ void DnsTesterAggregator::write(const char *filename) {
           first_tester->burst_delay_.count());
   fprintf(
       fp,
-      "query;thread id;tsent [ns];treceived [ns];received;answered;rtt [ns]\n");
+      "query name;query type;thread id;tsent [ns];treceived [ns];received;answered;rtt [ns]\n");
   /* Write queries */
-  char addr[64];
-  char query_addr[512];
-  uint32_t ip;
   for (const auto &tester : dns_testers_) {
-    int n = 0;
+    uint32_t n = 0;
     for (const auto &query : tester->tests_) {
-      ip = tester->ip_ | (tester->num_offset_ + n++);
-      snprintf(addr, sizeof(addr), dns64_addr_format_string, (ip >> 24) & 0xff,
-               (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
-      snprintf(query_addr, sizeof(query_addr), "%s.%s.", addr,
-               dns64_addr_domain);
-      fprintf(fp, "%s;%u;%lu;%lu;%d;%d;%ld\n", query_addr, tester->thread_id_,
+      size_t file_idx = (tester->query_start_ + n) % tester->queries_->size();
+      const QueryFileEntry &entry = (*tester->queries_)[file_idx];
+      auto it = QTypeStr.find(entry.qtype);
+      const char *typestr = (it != QTypeStr.end()) ? it->second : "UNKNOWN";
+      fprintf(fp, "%s;%s;%u;%lu;%lu;%d;%d;%ld\n", entry.name.c_str(), typestr,
+              tester->thread_id_,
               std::chrono::duration_cast<std::chrono::nanoseconds>(
                   query.time_sent_.time_since_epoch())
                   .count(),
@@ -503,6 +549,7 @@ void DnsTesterAggregator::write(const char *filename) {
                   query.time_received_.time_since_epoch())
                   .count(),
               query.received_, query.answered_, query.rtt_.count());
+      ++n;
     }
   }
   fclose(fp);

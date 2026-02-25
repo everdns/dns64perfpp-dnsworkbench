@@ -484,3 +484,13 @@ void DNSPacket::resize(uint8_t *begin, size_t oldsize, size_t newsize) {
   }
   len_ += (newsize - oldsize);
 }
+
+bool parseQType(const std::string &s, uint16_t *out) {
+  for (const auto &kv : QTypeStr) {
+    if (s == kv.second) {
+      *out = kv.first;
+      return true;
+    }
+  }
+  return false;
+}

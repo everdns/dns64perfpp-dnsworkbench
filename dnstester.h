@@ -41,8 +41,30 @@
 #include <vector>
 
 static const size_t UDP_MAX_LEN = 512;
-static const char *dns64_addr_format_string = "%03hhu-%03hhu-%03hhu-%03hhu";
-static const char *dns64_addr_domain = "dns64perf.test";
+
+/**
+ * One entry loaded from a dnsperf-format query file.
+ */
+struct QueryFileEntry {
+  std::string name;              /**< The DNS name from the file */
+  uint16_t qtype;                /**< The numeric query type */
+  std::vector<uint8_t> packet;   /**< Pre-serialized DNS query packet (TX ID = 0) */
+};
+
+/**
+ * Serialize a DNS query packet for the given name and qtype.
+ * The TX ID field is written as 0x0000 (a placeholder).
+ * Returns the serialized bytes.
+ * Throws std::runtime_error if the name is too long or invalid.
+ */
+std::vector<uint8_t> serializeDnsQuery(const std::string &name, uint16_t qtype);
+
+/**
+ * Read a dnsperf-format file and return the list of QueryFileEntry objects.
+ * Each line must be "<name> <type>".  Lines beginning with '#' or empty lines
+ * are skipped.  Throws std::runtime_error on file-open failure or parse error.
+ */
+std::vector<QueryFileEntry> loadQueryFile(const std::string &path);
 
 /**
  * An std::exception class for the DnsTester.
@@ -90,21 +112,18 @@ private:
 #else
   struct sockaddr_in6 server_; /**< Address of the server */
 #endif
-  uint32_t ip_;         /**< IP part of the subnet */
-  uint8_t netmask_;     /**< Netmask part of the subnet */
   uint32_t num_req_;    /**< Number of requests */
   uint32_t num_burst_;  /**< Burst size */
   uint32_t num_thread_; /**< Number of threads */
   uint32_t thread_id_;  /**< Thread id of this tester */
   std::chrono::time_point<std::chrono::high_resolution_clock>
       test_start_time_; /**< Time to start the test */
-  uint32_t num_offset_; /**< IP offset of this tester */
   std::chrono::nanoseconds
       burst_delay_; /**< Time between bursts in nanoseconds */
   struct timeval timeout_;
   uint8_t query_data_[UDP_MAX_LEN]; /**< Array to store the packet */
-  std::unique_ptr<DNSPacket>
-      query_; /**< The DNSPacket representation of the query */
+  const std::vector<QueryFileEntry> *queries_; /**< Shared query list */
+  uint32_t query_start_; /**< Index of first entry for this thread */
   std::vector<Socket>
       sockets_; /**< Sockets for sending and receiving queries */
   std::vector<struct pollfd> pollfds_; /**< Poll structures for sockets*/
@@ -132,7 +151,7 @@ public:
    * Constructor.
    * @param server_addr address of the server
    * @param port port of the server
-   * @param id id of the test
+   * @param queries pointer to the shared list of query entries
    * @param num_req number of requests
    * @param num_burst size of burst
    * @param burst_delay delay between bursts in nanoseconds
@@ -143,9 +162,9 @@ public:
 #else
       struct in6_addr server_addr,
 #endif
-      uint16_t port, uint32_t ip, uint8_t netmask, uint32_t num_req,
-      uint32_t num_burst, uint32_t thread_num, uint32_t thread_id,
-      uint16_t num_ports,
+      uint16_t port, const std::vector<QueryFileEntry> *queries,
+      uint32_t num_req, uint32_t num_burst, uint32_t thread_num,
+      uint32_t thread_id, uint16_t num_ports,
       const std::chrono::time_point<std::chrono::high_resolution_clock>
           &test_start_time,
       std::chrono::nanoseconds burst_delay, struct timeval timeout);
