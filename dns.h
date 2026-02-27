@@ -34,6 +34,7 @@
 #include <netinet/in.h>
 #include <stdint.h>
 #include <vector>
+#include <string>
 
 /**
  * Class to represent a DNS header.
