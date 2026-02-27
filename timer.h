@@ -30,6 +30,7 @@
 #include <chrono>
 #include <functional>
 #include <thread>
+#include <string>
 
 /**
  * Class to represent a generic, function execution time corrected timer.

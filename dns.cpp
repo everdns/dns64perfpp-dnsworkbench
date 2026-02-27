@@ -24,7 +24,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/types.h>
-
+#include <stdexcept>
 #include <syslog.h>
 
 DNSLabel::DNSLabel(uint8_t *begin) : begin_{begin} {}
