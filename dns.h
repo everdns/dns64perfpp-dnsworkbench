@@ -287,13 +287,6 @@ enum QClass { IN = 1, CH = 3, HS = 4, QCLASS_NONE = 254, QCLASS_ANY = 255 };
 static const std::map<uint16_t, const char *> QClassStr = {
     {1, "IN"}, {3, "CH"}, {4, "HS"}, {254, "NONE"}, {255, "ANY"}};
 
-/**
- * Parse a QType string (e.g. "A", "AAAA", "MX") to its numeric value.
- * Returns true on success and writes the value to *out.
- * Returns false if the string is not a known type name.
- */
-bool parseQType(const std::string &s, uint16_t *out);
-
 struct DNSPacket;
 
 /**

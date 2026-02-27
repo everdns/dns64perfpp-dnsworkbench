@@ -40,12 +40,14 @@ int main(int argc, char *argv[]) {
   struct in6_addr server_addr;
 #endif
   uint16_t port;
+  uint32_t ip;
+  uint8_t netmask;
   uint32_t num_req, num_burst, num_thread;
   uint16_t num_port;
   uint64_t burst_delay;
   struct timeval timeout;
   if (argc < 10) {
-    std::cerr << "Usage: dns64perf++ <server> <port> <query-file> <number of "
+    std::cerr << "Usage: dns64perf++ <server> <port> <subnet> <number of "
                  "requests> <burst size> <number of threads> <number of ports "
                  "per thread> <delay between "
                  "bursts in ns> <timeout in s>"
@@ -68,24 +70,28 @@ int main(int argc, char *argv[]) {
     std::cerr << "Bad port." << std::endl;
     return -1;
   }
-  /* Load query file */
-  std::string query_file = argv[3];
-  std::vector<QueryFileEntry> queries;
-  try {
-    queries = loadQueryFile(query_file);
-  } catch (const std::exception &e) {
-    std::cerr << "Failed to load query file: " << e.what() << std::endl;
+  /* Subnet */
+  uint8_t temp[4];
+  if (sscanf(argv[3], "%hhu.%hhu.%hhu.%hhu/%hhu", temp, temp + 1, temp + 2,
+             temp + 3, &netmask) != 5) {
+    std::cerr << "Bad subnet." << std::endl;
     return -1;
   }
+  if (netmask > 32) {
+    std::cerr << "Bad netmask." << std::endl;
+    return -1;
+  }
+  ip = ((temp[0] << 24) | (temp[1] << 16) | (temp[2] << 8) | temp[3]) &
+       ~(((uint64_t)1 << (32 - netmask)) - 1);
   /* Number of requests */
   if (sscanf(argv[4], "%u", &num_req) != 1) {
     std::cerr << "Bad number of requests, must be between 0 and 2^32."
               << std::endl;
     return -1;
   }
-  if ((num_req / num_thread) > 65535) {
-    std::cerr << "Number of requests per thread must not exceed 65535 "
-                 "(TX ID space limitation)."
+  if (num_req > ((uint64_t)1 << (32 - netmask))) {
+    std::cerr << "The number of requests is higher than the avaliable IPs in "
+                 "the subnet."
               << std::endl;
     return -1;
   }
@@ -134,7 +140,7 @@ int main(int argc, char *argv[]) {
       std::chrono::high_resolution_clock::now() + std::chrono::seconds(2);
   for (uint32_t i = 0; i < num_thread; i++) {
     testers.emplace_back(std::make_unique<DnsTester>(
-        server_addr, port, &queries, num_req, num_burst, num_thread, i,
+        server_addr, port, ip, netmask, num_req, num_burst, num_thread, i,
         num_port,
         reference_time + std::chrono::nanoseconds{burst_delay / num_thread} * i,
         std::chrono::nanoseconds{burst_delay}, timeout));
