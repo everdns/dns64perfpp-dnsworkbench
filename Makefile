@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-BINARY = dns64perf++
+BINARY = dns64perfpp-workbench
 OBJECTS = main.o timer.o dns.o dnstester.o raii_socket.o spin_sleep.o
 HEADERS = timer.h dns.h dnstester.h raii_socket.h spin_sleep.hpp
 
