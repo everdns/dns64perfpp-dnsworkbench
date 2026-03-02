@@ -114,13 +114,12 @@ private:
   struct sockaddr_in6 server_; /**< Address of the server */
 #endif
   uint32_t num_req_;    /**< Number of requests */
-  uint32_t num_burst_;  /**< Burst size */
   uint32_t num_thread_; /**< Number of threads */
   uint32_t thread_id_;  /**< Thread id of this tester */
   std::chrono::time_point<std::chrono::high_resolution_clock>
       test_start_time_; /**< Time to start the test */
   std::chrono::nanoseconds
-      burst_delay_; /**< Time between bursts in nanoseconds */
+      interval_ns_; /**< Interval between packets in nanoseconds (1e9 / QPS) */
   struct timeval timeout_;
   uint8_t query_data_[UDP_MAX_LEN]; /**< Array to store the packet */
   std::vector<QueryFileEntry> queries_; /**< Query list for this thread */
@@ -132,8 +131,8 @@ private:
   uint32_t num_sent_;                  /**< Number of sent queries so far */
   uint32_t tx_to_query_[65536]; /**< Array mapping TX ID to query index (for in-flight requests) */
   std::mutex m_;                       /**< Mutex for accessing queries */
-  std::unique_ptr<Timer> timer_;       /**< Timer for scheduling queries */
   std::vector<uint8_t> answer_data_;
+  bool use_so_txtime_;                 /**< Whether to use SO_TXTIME for rate limiting */
 
   friend class DnsTesterAggregator;
 
@@ -155,8 +154,12 @@ public:
    * @param port port of the server
    * @param queries list of query entries for this thread
    * @param num_req number of requests
-   * @param num_burst size of burst
-   * @param burst_delay delay between bursts in nanoseconds
+   * @param num_thread total number of threads
+   * @param thread_id this thread's ID
+   * @param num_ports number of ports per thread
+   * @param test_start_time when to start the test
+   * @param interval_ns interval between packets in nanoseconds (calculated from QPS)
+   * @param timeout socket timeout for receiving
    */
   DnsTester(
 #ifdef DNS64PERFPP_IPV4
@@ -165,11 +168,11 @@ public:
       struct in6_addr server_addr,
 #endif
       uint16_t port, const std::vector<QueryFileEntry> &queries,
-      uint32_t num_req, uint32_t num_burst, uint32_t thread_num,
-      uint32_t thread_id, uint16_t num_ports,
+      uint32_t num_req, uint32_t num_thread, uint32_t thread_id,
+      uint16_t num_ports,
       const std::chrono::time_point<std::chrono::high_resolution_clock>
           &test_start_time,
-      std::chrono::nanoseconds burst_delay, struct timeval timeout);
+      std::chrono::nanoseconds interval_ns, struct timeval timeout);
 
   /**
    * Starts the test

@@ -40,15 +40,14 @@ int main(int argc, char *argv[]) {
   struct in6_addr server_addr;
 #endif
   uint16_t port;
-  uint32_t num_req, num_burst, num_thread;
+  uint32_t num_req, num_thread;
   uint16_t num_port;
-  uint64_t burst_delay;
+  uint64_t qps;
   struct timeval timeout;
-  if (argc < 10) {
+  if (argc < 8) {
     std::cerr << "Usage: dns64perfpp-workbench <server> <port> <query-file> <number of "
-                 "requests> <burst size> <number of threads> <number of ports "
-                 "per thread> <delay between "
-                 "bursts in ns> <timeout in s>"
+                 "requests> <number of threads> <number of ports "
+                 "per thread> <QPS (queries per second)> <timeout in s>"
               << std::endl;
     return -1;
   }
@@ -83,38 +82,26 @@ int main(int argc, char *argv[]) {
               << std::endl;
     return -1;
   }
-  /* Burst size */
-  if (sscanf(argv[5], "%u", &num_burst) != 1) {
-    std::cerr << "Bad burst size, must be between 0 and 2^32." << std::endl;
-    return -1;
-  }
   /* Number of threads */
-  if (sscanf(argv[6], "%u", &num_thread) != 1) {
+  if (sscanf(argv[5], "%u", &num_thread) != 1) {
     std::cerr << "Bad number of threads size, must be between 0 and 2^32."
               << std::endl;
     return -1;
   }
-  /* Sanity check */
-  if (num_req % (num_thread * num_burst) != 0) {
-    std::cerr << "Number of requests must be divisble by (number of threads * "
-                 "burst size)"
-              << std::endl;
-    return -1;
-  }
   /* Number of ports per thread */
-  if (sscanf(argv[7], "%hu", &num_port) != 1) {
+  if (sscanf(argv[6], "%hu", &num_port) != 1) {
     std::cerr << "Bad number of ports per thread, must be between 0 and 2^16."
               << std::endl;
     return -1;
   }
-  /* Burst delay */
-  if (sscanf(argv[8], "%lu", &burst_delay) != 1) {
-    std::cerr << "Bad delay between bursts." << std::endl;
+  /* QPS (queries per second) */
+  if (sscanf(argv[7], "%lu", &qps) != 1 || qps == 0) {
+    std::cerr << "Bad QPS, must be greater than 0." << std::endl;
     return -1;
   }
   /* Timeout */
   double timeout_, s, us;
-  if (sscanf(argv[9], "%lf", &timeout_) != 1) {
+  if (sscanf(argv[8], "%lf", &timeout_) != 1) {
     std::cerr << "Bad timeout." << std::endl;
     return -1;
   }
@@ -126,6 +113,9 @@ int main(int argc, char *argv[]) {
   std::vector<std::thread> threads;
   auto reference_time =
       std::chrono::high_resolution_clock::now() + std::chrono::seconds(2);
+
+  /* Calculate per-packet interval from QPS (in nanoseconds) */
+  uint64_t interval_ns = 1000000000ULL / qps;
 
   /* Split queries among threads */
   size_t queries_per_thread = queries.size() / num_thread;
@@ -142,10 +132,10 @@ int main(int argc, char *argv[]) {
     );
 
     testers.emplace_back(std::make_unique<DnsTester>(
-        server_addr, port, thread_queries, num_req, num_burst, num_thread, i,
+        server_addr, port, thread_queries, num_req, num_thread, i,
         num_port,
-        reference_time + std::chrono::nanoseconds{burst_delay / num_thread} * i,
-        std::chrono::nanoseconds{burst_delay}, timeout));
+        reference_time + std::chrono::nanoseconds{interval_ns / num_thread} * i,
+        std::chrono::nanoseconds{interval_ns}, timeout));
   }
   try {
     for (uint32_t i = 0; i < num_thread; i++) {
