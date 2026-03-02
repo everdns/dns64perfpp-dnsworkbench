@@ -126,9 +126,23 @@ int main(int argc, char *argv[]) {
   std::vector<std::thread> threads;
   auto reference_time =
       std::chrono::high_resolution_clock::now() + std::chrono::seconds(2);
+
+  /* Split queries among threads */
+  size_t queries_per_thread = queries.size() / num_thread;
+
   for (uint32_t i = 0; i < num_thread; i++) {
+    /* Calculate start and end indices for this thread's queries */
+    size_t start_idx = i * queries_per_thread;
+    size_t end_idx = (i == num_thread - 1) ? queries.size() : (i + 1) * queries_per_thread;
+
+    /* Create a subset of queries for this thread */
+    std::vector<QueryFileEntry> thread_queries(
+        queries.begin() + start_idx,
+        queries.begin() + end_idx
+    );
+
     testers.emplace_back(std::make_unique<DnsTester>(
-        server_addr, port, &queries, num_req, num_burst, num_thread, i,
+        server_addr, port, thread_queries, num_req, num_burst, num_thread, i,
         num_port,
         reference_time + std::chrono::nanoseconds{burst_delay / num_thread} * i,
         std::chrono::nanoseconds{burst_delay}, timeout));

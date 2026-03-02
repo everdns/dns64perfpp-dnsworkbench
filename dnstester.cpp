@@ -150,7 +150,7 @@ DnsTester::DnsTester(
 #else
     struct in6_addr server_addr,
 #endif
-    uint16_t port, const std::vector<QueryFileEntry> *queries,
+    uint16_t port, const std::vector<QueryFileEntry> &queries,
     uint32_t num_req, uint32_t num_burst, uint32_t num_thread,
     uint32_t thread_id, uint16_t num_ports,
     const std::chrono::time_point<std::chrono::high_resolution_clock>
@@ -265,7 +265,7 @@ void DnsTester::test() {
 
     /* Select the entry from the global list (cycling with modulo) */
     const QueryFileEntry &entry =
-        (*queries_)[(query_start_ + num_sent_) % queries_->size()];
+        queries_[(query_start_ + num_sent_) % queries_.size()];
 
     /* Copy pre-serialized packet into the send buffer */
     size_t pkt_len = entry.packet.size();
@@ -542,8 +542,8 @@ void DnsTesterAggregator::write(const char *filename) {
   for (const auto &tester : dns_testers_) {
     uint32_t n = 0;
     for (const auto &query : tester->tests_) {
-      size_t file_idx = (tester->query_start_ + n) % tester->queries_->size();
-      const QueryFileEntry &entry = (*tester->queries_)[file_idx];
+      size_t file_idx = (tester->query_start_ + n) % tester->queries_.size();
+      const QueryFileEntry &entry = tester->queries_[file_idx];
       auto it = QTypeStr.find(entry.qtype);
       const char *typestr = (it != QTypeStr.end()) ? it->second : "UNKNOWN";
       fprintf(fp, "%s;%s;%u;%lu;%lu;%d;%d;%ld\n", entry.name.c_str(), typestr,

@@ -123,7 +123,7 @@ private:
       burst_delay_; /**< Time between bursts in nanoseconds */
   struct timeval timeout_;
   uint8_t query_data_[UDP_MAX_LEN]; /**< Array to store the packet */
-  const std::vector<QueryFileEntry> *queries_; /**< Shared query list */
+  std::vector<QueryFileEntry> queries_; /**< Query list for this thread */
   uint32_t query_start_; /**< Index of first entry for this thread */
   std::vector<Socket>
       sockets_; /**< Sockets for sending and receiving queries */
@@ -153,7 +153,7 @@ public:
    * Constructor.
    * @param server_addr address of the server
    * @param port port of the server
-   * @param queries pointer to the shared list of query entries
+   * @param queries list of query entries for this thread
    * @param num_req number of requests
    * @param num_burst size of burst
    * @param burst_delay delay between bursts in nanoseconds
@@ -164,7 +164,7 @@ public:
 #else
       struct in6_addr server_addr,
 #endif
-      uint16_t port, const std::vector<QueryFileEntry> *queries,
+      uint16_t port, const std::vector<QueryFileEntry> &queries,
       uint32_t num_req, uint32_t num_burst, uint32_t thread_num,
       uint32_t thread_id, uint16_t num_ports,
       const std::chrono::time_point<std::chrono::high_resolution_clock>
