@@ -156,14 +156,12 @@ DnsTester::DnsTester(
     const std::chrono::time_point<std::chrono::high_resolution_clock>
         &test_start_time,
     std::chrono::nanoseconds burst_delay, struct timeval timeout)
-    : queries_{queries}, num_req_{num_req / num_thread},
-      num_burst_{num_burst}, num_thread_{num_thread}, thread_id_{thread_id},
-      test_start_time_{test_start_time}, burst_delay_{burst_delay}, num_sent_{
-                                                                        0} {
+    : num_req_{num_req / num_thread}, num_burst_{num_burst},
+      num_thread_{num_thread}, thread_id_{thread_id},
+      test_start_time_{test_start_time}, burst_delay_{burst_delay},
+      timeout_{timeout}, queries_{queries}, num_sent_{0} {
   /* Reserve space for answer data */
   answer_data_.resize(UDP_MAX_LEN);
-  /* Set timeout */
-  timeout_ = timeout;
   /* Calculate query start index */
   query_start_ = thread_id_ * num_req_;
   /* Fill server sockaddr structure */
@@ -273,9 +271,9 @@ void DnsTester::test() {
     size_t pkt_len = entry.packet.size();
     memcpy(query_data_, entry.packet.data(), pkt_len);
 
-    /* Patch the TX ID in-place */
-    reinterpret_cast<DNSHeader *>(query_data_)
-        ->id(static_cast<uint16_t>(num_sent_));
+    /* Patch the TX ID in-place (use modulo to handle TX ID space reuse) */
+    uint16_t tx_id = static_cast<uint16_t>(num_sent_ % 65536);
+    reinterpret_cast<DNSHeader *>(query_data_)->id(tx_id);
 
     /* Send the query */
     ssize_t sent;
@@ -293,6 +291,7 @@ void DnsTester::test() {
     /* Store the time */
     query.time_sent_ = std::chrono::high_resolution_clock::now();
     m_.lock();
+    tx_to_query_[tx_id] = num_sent_;
     num_sent_++;
     m_.unlock();
   }
@@ -350,11 +349,18 @@ inline void DnsTester::receive(uint16_t socket_index) {
     }
     /* Find the corresponding query using TX ID */
     uint16_t tx_id = answer.header_->id();
-    if (tx_id >= num_req_) {
-      /* TX ID out of range for this thread — discard (stale or misrouted) */
+    m_.lock();
+    auto it = tx_to_query_.find(tx_id);
+    if (it == tx_to_query_.end()) {
+      /* TX ID not found in pending queries — discard (stale or misrouted) */
+      m_.unlock();
       return;
     }
-    DnsQuery &query = tests_[tx_id];
+    uint32_t query_idx = it->second;
+    tx_to_query_.erase(it);
+    m_.unlock();
+
+    DnsQuery &query = tests_[query_idx];
     /* Set the received flag true */
     query.received_ = true;
     /* Set the received timestamp */

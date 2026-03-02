@@ -83,12 +83,6 @@ int main(int argc, char *argv[]) {
               << std::endl;
     return -1;
   }
-  if ((num_req / num_thread) > 65535) {
-    std::cerr << "Number of requests per thread must not exceed 65535 "
-                 "(TX ID space limitation)."
-              << std::endl;
-    return -1;
-  }
   /* Burst size */
   if (sscanf(argv[5], "%u", &num_burst) != 1) {
     std::cerr << "Bad burst size, must be between 0 and 2^32." << std::endl;
