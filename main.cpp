@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
   uint64_t burst_delay;
   struct timeval timeout;
   if (argc < 10) {
-    std::cerr << "Usage: dns64perf++ <server> <port> <query-file> <number of "
+    std::cerr << "Usage: dns64perfpp-workbench <server> <port> <query-file> <number of "
                  "requests> <burst size> <number of threads> <number of ports "
                  "per thread> <delay between "
                  "bursts in ns> <timeout in s>"
