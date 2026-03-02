@@ -130,7 +130,7 @@ private:
   std::vector<struct pollfd> pollfds_; /**< Poll structures for sockets*/
   std::vector<DnsQuery> tests_;        /**< Test queries */
   uint32_t num_sent_;                  /**< Number of sent queries so far */
-  std::map<uint16_t, uint32_t> tx_to_query_; /**< Map TX ID to query index (for in-flight requests) */
+  uint32_t tx_to_query_[65536]; /**< Array mapping TX ID to query index (for in-flight requests) */
   std::mutex m_;                       /**< Mutex for accessing queries */
   std::unique_ptr<Timer> timer_;       /**< Timer for scheduling queries */
   std::vector<uint8_t> answer_data_;

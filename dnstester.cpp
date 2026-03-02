@@ -160,6 +160,8 @@ DnsTester::DnsTester(
       num_thread_{num_thread}, thread_id_{thread_id},
       test_start_time_{test_start_time}, burst_delay_{burst_delay},
       timeout_{timeout}, queries_{queries}, num_sent_{0} {
+  /* Initialize tx_to_query_ array */
+  std::fill(std::begin(tx_to_query_), std::end(tx_to_query_), UINT32_MAX);
   /* Reserve space for answer data */
   answer_data_.resize(UDP_MAX_LEN);
   /* Calculate query start index */
@@ -263,7 +265,7 @@ void DnsTester::test() {
     /* Get query store */
     DnsQuery &query = tests_[num_sent_];
 
-    /* Select the entry from the global list (cycling with modulo) */
+    /* Select the entry from the local list (cycling with modulo) */
     const QueryFileEntry &entry =
         queries_[(query_start_ + num_sent_) % queries_.size()];
 
@@ -350,14 +352,13 @@ inline void DnsTester::receive(uint16_t socket_index) {
     /* Find the corresponding query using TX ID */
     uint16_t tx_id = answer.header_->id();
     m_.lock();
-    auto it = tx_to_query_.find(tx_id);
-    if (it == tx_to_query_.end()) {
+    uint32_t query_idx = tx_to_query_[tx_id];
+    if (query_idx == UINT32_MAX) {
       /* TX ID not found in pending queries — discard (stale or misrouted) */
       m_.unlock();
       return;
     }
-    uint32_t query_idx = it->second;
-    tx_to_query_.erase(it);
+    tx_to_query_[tx_id] = UINT32_MAX;
     m_.unlock();
 
     DnsQuery &query = tests_[query_idx];
