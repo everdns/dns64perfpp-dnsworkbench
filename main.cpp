@@ -117,6 +117,9 @@ int main(int argc, char *argv[]) {
   /* Calculate per-packet interval from QPS (in nanoseconds) */
   uint64_t interval_ns = 1000000000ULL / qps;
 
+  /* Calculate per-thread interval: each thread sends at (QPS / num_threads) */
+  uint64_t per_thread_interval_ns = interval_ns * num_thread;
+
   /* Split queries among threads */
   size_t queries_per_thread = queries.size() / num_thread;
 
@@ -134,8 +137,8 @@ int main(int argc, char *argv[]) {
     testers.emplace_back(std::make_unique<DnsTester>(
         server_addr, port, thread_queries, num_req, num_thread, i,
         num_port,
-        reference_time + std::chrono::nanoseconds{interval_ns / num_thread} * i,
-        std::chrono::nanoseconds{interval_ns}, timeout));
+        reference_time,
+        std::chrono::nanoseconds{per_thread_interval_ns}, timeout));
   }
   try {
     for (uint32_t i = 0; i < num_thread; i++) {
