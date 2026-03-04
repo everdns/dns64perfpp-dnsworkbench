@@ -322,6 +322,21 @@ DnsTester::DnsTester(
 }
 
 void DnsTester::test() {
+  /* Get reference TAI time once at the start */
+  uint64_t start_tai_ns = 0;
+  if (use_so_txtime_) {
+    try {
+      start_tai_ns = get_clock_tai_ns();
+    } catch (const std::exception &e) {
+      std::cerr << "Warning: Failed to get CLOCK_TAI: " << e.what()
+                << " Falling back to regular sendto()" << std::endl;
+      use_so_txtime_ = false;
+    }
+  }
+
+  /* Calculate sleep duration per packet to match QPS rate */
+  std::chrono::nanoseconds sleep_duration = interval_ns_;
+
   /* Send all packets with SO_TXTIME scheduling */
   while (num_sent_ < num_req_) {
     /* Get query store */
@@ -340,20 +355,9 @@ void DnsTester::test() {
     reinterpret_cast<DNSHeader *>(query_data_)->id(tx_id);
 
     /* Calculate transmission time based on packet sequence number and QPS */
-    uint64_t txtime_ns = 0;
-    if (use_so_txtime_) {
-      try {
-        uint64_t current_tai = get_clock_tai_ns();
-        /* Schedule packet at: num_sent_ * interval_ns from now */
-        uint64_t offset_ns =
-            static_cast<uint64_t>(num_sent_) * interval_ns_.count();
-        txtime_ns = current_tai + offset_ns;
-      } catch (const std::exception &e) {
-        std::cerr << "Warning: Failed to get CLOCK_TAI: " << e.what()
-                  << " Falling back to regular sendto()" << std::endl;
-        use_so_txtime_ = false;
-      }
-    }
+    /* Schedule packet at: start_tai + (num_sent_ * interval_ns) */
+    uint64_t txtime_ns =
+        start_tai_ns + (static_cast<uint64_t>(num_sent_) * interval_ns_.count());
 
     /* Send the query */
     ssize_t sent = -1;
@@ -390,6 +394,11 @@ void DnsTester::test() {
     tx_to_query_[tx_id] = num_sent_;
     num_sent_++;
     m_.unlock();
+
+    /* Sleep to match the requested QPS rate */
+    if (use_so_txtime_ && num_sent_ < num_req_) {
+      spinsleep::sleep_for(sleep_duration);
+    }
   }
 }
 
