@@ -133,6 +133,7 @@ private:
   std::mutex m_;                       /**< Mutex for accessing queries */
   std::vector<uint8_t> answer_data_;
   bool use_so_txtime_;                 /**< Whether to use SO_TXTIME for rate limiting */
+  uint32_t batch_size_;                /**< Number of packets to queue before sleeping */
 
   friend class DnsTesterAggregator;
 
@@ -157,6 +158,7 @@ public:
    * @param num_thread total number of threads
    * @param thread_id this thread's ID
    * @param num_ports number of ports per thread
+   * @param batch_size number of packets to queue before sleeping
    * @param test_start_time when to start the test
    * @param interval_ns interval between packets in nanoseconds (calculated from QPS)
    * @param timeout socket timeout for receiving
@@ -169,7 +171,7 @@ public:
 #endif
       uint16_t port, const std::vector<QueryFileEntry> &queries,
       uint32_t num_req, uint32_t num_thread, uint32_t thread_id,
-      uint16_t num_ports,
+      uint16_t num_ports, uint32_t batch_size,
       const std::chrono::time_point<std::chrono::high_resolution_clock>
           &test_start_time,
       std::chrono::nanoseconds interval_ns, struct timeval timeout);

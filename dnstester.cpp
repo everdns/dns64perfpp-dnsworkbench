@@ -202,14 +202,14 @@ DnsTester::DnsTester(
 #endif
     uint16_t port, const std::vector<QueryFileEntry> &queries,
     uint32_t num_req, uint32_t num_thread, uint32_t thread_id,
-    uint16_t num_ports,
+    uint16_t num_ports, uint32_t batch_size,
     const std::chrono::time_point<std::chrono::high_resolution_clock>
         &test_start_time,
     std::chrono::nanoseconds interval_ns, struct timeval timeout)
     : num_req_{num_req / num_thread}, num_thread_{num_thread},
       thread_id_{thread_id}, test_start_time_{test_start_time},
       interval_ns_{interval_ns}, timeout_{timeout}, queries_{queries},
-      num_sent_{0}, use_so_txtime_{true} {
+      num_sent_{0}, use_so_txtime_{true}, batch_size_{batch_size} {
   /* Initialize tx_to_query_ array */
   std::fill(std::begin(tx_to_query_), std::end(tx_to_query_), UINT32_MAX);
   /* Reserve space for answer data */
@@ -334,8 +334,10 @@ void DnsTester::test() {
     }
   }
 
-  /* Calculate sleep duration per packet to match QPS rate */
-  std::chrono::nanoseconds sleep_duration = interval_ns_;
+  /* Calculate sleep duration based on batch size */
+  std::chrono::nanoseconds sleep_duration = interval_ns_ * static_cast<int64_t>(batch_size_);
+
+  uint32_t packets_in_batch = 0;
 
   /* Send all packets with SO_TXTIME scheduling */
   while (num_sent_ < num_req_) {
@@ -395,9 +397,11 @@ void DnsTester::test() {
     num_sent_++;
     m_.unlock();
 
-    /* Sleep to match the requested QPS rate */
-    if (use_so_txtime_ && num_sent_ < num_req_) {
+    /* Increment batch counter and sleep after batch_size packets */
+    packets_in_batch++;
+    if (use_so_txtime_ && packets_in_batch >= batch_size_ && num_sent_ < num_req_) {
       spinsleep::sleep_for(sleep_duration);
+      packets_in_batch = 0;
     }
   }
 }

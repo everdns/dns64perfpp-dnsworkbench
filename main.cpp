@@ -42,12 +42,13 @@ int main(int argc, char *argv[]) {
   uint16_t port;
   uint32_t num_req, num_thread;
   uint16_t num_port;
+  uint32_t batch_size;
   uint64_t qps;
   struct timeval timeout;
-  if (argc < 8) {
+  if (argc < 9) {
     std::cerr << "Usage: dns64perfpp-workbench <server> <port> <query-file> <number of "
                  "requests> <number of threads> <number of ports "
-                 "per thread> <QPS (queries per second)> <timeout in s>"
+                 "per thread> <batch size> <QPS (queries per second)> <timeout in s>"
               << std::endl;
     return -1;
   }
@@ -94,14 +95,19 @@ int main(int argc, char *argv[]) {
               << std::endl;
     return -1;
   }
+  /* Batch size */
+  if (sscanf(argv[7], "%u", &batch_size) != 1 || batch_size == 0) {
+    std::cerr << "Bad batch size, must be greater than 0." << std::endl;
+    return -1;
+  }
   /* QPS (queries per second) */
-  if (sscanf(argv[7], "%lu", &qps) != 1 || qps == 0) {
+  if (sscanf(argv[8], "%lu", &qps) != 1 || qps == 0) {
     std::cerr << "Bad QPS, must be greater than 0." << std::endl;
     return -1;
   }
   /* Timeout */
   double timeout_, s, us;
-  if (sscanf(argv[8], "%lf", &timeout_) != 1) {
+  if (sscanf(argv[9], "%lf", &timeout_) != 1) {
     std::cerr << "Bad timeout." << std::endl;
     return -1;
   }
@@ -136,7 +142,7 @@ int main(int argc, char *argv[]) {
 
     testers.emplace_back(std::make_unique<DnsTester>(
         server_addr, port, thread_queries, num_req, num_thread, i,
-        num_port,
+        num_port, batch_size,
         reference_time,
         std::chrono::nanoseconds{per_thread_interval_ns}, timeout));
   }
