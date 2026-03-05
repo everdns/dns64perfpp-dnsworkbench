@@ -35,6 +35,12 @@ void sleep_for(const std::chrono::duration<Rep, Period> &sleep_duration) {
 void sleep_until(
     const std::chrono::time_point<std::chrono::high_resolution_clock>
         &sleep_target);
+
+/**
+ * Calibrate the minimum reliable nanosleep time on this system.
+ * Measures nanosleep overhead and returns time in nanoseconds.
+ */
+uint64_t calibrate_min_sleep();
 }; // namespace spinsleep
 
 #endif

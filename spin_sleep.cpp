@@ -20,6 +20,7 @@
  */
 
 #include "spin_sleep.hpp"
+#include <ctime>
 
 namespace spinsleep {
 void sleep_until(
@@ -27,5 +28,32 @@ void sleep_until(
         &sleep_target) {
   while (std::chrono::high_resolution_clock::now() < sleep_target)
     ;
+}
+
+uint64_t calibrate_min_sleep() {
+  struct timespec start, stop;
+  struct timespec wait = {0, 0};
+
+  if (clock_gettime(CLOCK_REALTIME, &start) < 0) {
+    return 1000000;  // Default 1ms if measurement fails
+  }
+
+  // Call nanosleep 100 times with 0 sleep
+  for (int i = 0; i < 100; i++) {
+    nanosleep(&wait, NULL);
+  }
+
+  if (clock_gettime(CLOCK_REALTIME, &stop) < 0) {
+    return 1000000;  // Default 1ms if measurement fails
+  }
+
+  // Calculate elapsed time
+  uint64_t elapsed_ns = ((uint64_t)stop.tv_sec - (uint64_t)start.tv_sec) * 1000000000ULL +
+                        ((uint64_t)stop.tv_nsec - (uint64_t)start.tv_nsec);
+
+  // Average per nanosleep call, with 3x safety factor
+  uint64_t min_sleep = (elapsed_ns / 100) * 3;
+
+  return min_sleep;
 }
 } // namespace spinsleep

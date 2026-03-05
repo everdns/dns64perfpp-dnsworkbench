@@ -28,7 +28,6 @@
 
 #include "dns.h"
 #include "raii_socket.h"
-#include "timer.h"
 #include <chrono>
 #include <exception>
 #include <map>
@@ -134,6 +133,7 @@ private:
   std::vector<uint8_t> answer_data_;
   bool use_so_txtime_;                 /**< Whether to use SO_TXTIME for rate limiting */
   uint32_t batch_size_;                /**< Number of packets to queue before sleeping */
+  uint64_t min_sleep_ns_;              /**< Minimum reliable sleep time on this system */
 
   friend class DnsTesterAggregator;
 
@@ -171,7 +171,7 @@ public:
 #endif
       uint16_t port, const std::vector<QueryFileEntry> &queries,
       uint32_t num_req, uint32_t num_thread, uint32_t thread_id,
-      uint16_t num_ports, uint32_t batch_size,
+      uint16_t num_ports, uint32_t batch_size, uint64_t min_sleep_ns,
       const std::chrono::time_point<std::chrono::high_resolution_clock>
           &test_start_time,
       std::chrono::nanoseconds interval_ns, struct timeval timeout);

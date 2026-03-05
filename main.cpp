@@ -20,6 +20,7 @@
  */
 
 #include "dnstester.h"
+#include "spin_sleep.hpp"
 #include <arpa/inet.h>
 #include <chrono>
 #include <cmath>
@@ -126,6 +127,11 @@ int main(int argc, char *argv[]) {
   /* Calculate per-thread interval: each thread sends at (QPS / num_threads) */
   uint64_t per_thread_interval_ns = interval_ns * num_thread;
 
+  /* Calibrate minimum sleep time */
+  uint64_t min_sleep_ns = spinsleep::calibrate_min_sleep();
+  std::cerr << "Calibrated: min_sleep=" << min_sleep_ns << " ns ("
+            << (min_sleep_ns / 1000.0) << " µs)" << std::endl;
+
   /* Split queries among threads */
   size_t queries_per_thread = queries.size() / num_thread;
 
@@ -142,7 +148,7 @@ int main(int argc, char *argv[]) {
 
     testers.emplace_back(std::make_unique<DnsTester>(
         server_addr, port, thread_queries, num_req, num_thread, i,
-        num_port, batch_size,
+        num_port, batch_size, min_sleep_ns,
         reference_time,
         std::chrono::nanoseconds{per_thread_interval_ns}, timeout));
   }

@@ -102,7 +102,6 @@ std::vector<uint8_t> serializeDnsQuery(const std::string &name,
   size_t len = static_cast<size_t>(p - buf);
   return std::vector<uint8_t>(buf, buf + len);
 }
-
 std::vector<QueryFileEntry> loadQueryFile(const std::string &path) {
   std::ifstream f(path);
   if (!f)
@@ -202,14 +201,15 @@ DnsTester::DnsTester(
 #endif
     uint16_t port, const std::vector<QueryFileEntry> &queries,
     uint32_t num_req, uint32_t num_thread, uint32_t thread_id,
-    uint16_t num_ports, uint32_t batch_size,
+    uint16_t num_ports, uint32_t batch_size, uint64_t min_sleep_ns,
     const std::chrono::time_point<std::chrono::high_resolution_clock>
         &test_start_time,
     std::chrono::nanoseconds interval_ns, struct timeval timeout)
     : num_req_{num_req / num_thread}, num_thread_{num_thread},
       thread_id_{thread_id}, test_start_time_{test_start_time},
       interval_ns_{interval_ns}, timeout_{timeout}, queries_{queries},
-      num_sent_{0}, use_so_txtime_{true}, batch_size_{batch_size} {
+      num_sent_{0}, use_so_txtime_{true}, batch_size_{batch_size},
+      min_sleep_ns_{min_sleep_ns} {
   /* Initialize tx_to_query_ array */
   std::fill(std::begin(tx_to_query_), std::end(tx_to_query_), UINT32_MAX);
   /* Reserve space for answer data */
@@ -322,22 +322,11 @@ DnsTester::DnsTester(
 }
 
 void DnsTester::test() {
-  /* Get reference TAI time once at the start */
-  uint64_t start_tai_ns = 0;
-  if (use_so_txtime_) {
-    try {
-      start_tai_ns = get_clock_tai_ns();
-    } catch (const std::exception &e) {
-      std::cerr << "Warning: Failed to get CLOCK_TAI: " << e.what()
-                << " Falling back to regular sendto()" << std::endl;
-      use_so_txtime_ = false;
-    }
-  }
-
-  /* Calculate sleep duration based on batch size */
-  std::chrono::nanoseconds sleep_duration = interval_ns_ * static_cast<int64_t>(batch_size_);
+  /* Get reference TAI time once at the start - required for SO_TXTIME batching */
+  uint64_t start_tai_ns = get_clock_tai_ns();
 
   uint32_t packets_in_batch = 0;
+  uint64_t txtime_ns = start_tai_ns;  /* Track the txtime of the next packet to send */
 
   /* Send all packets with SO_TXTIME scheduling */
   while (num_sent_ < num_req_) {
@@ -356,53 +345,47 @@ void DnsTester::test() {
     uint16_t tx_id = static_cast<uint16_t>(num_sent_ % 65536);
     reinterpret_cast<DNSHeader *>(query_data_)->id(tx_id);
 
-    /* Calculate transmission time based on packet sequence number and QPS */
-    /* Schedule packet at: start_tai + (num_sent_ * interval_ns) */
-    uint64_t txtime_ns =
-        start_tai_ns + (static_cast<uint64_t>(num_sent_) * interval_ns_.count());
-
     /* Send the query */
     ssize_t sent = -1;
-    if (use_so_txtime_) {
-      /* Use SO_TXTIME for scheduling */
-      while ((sent = sendto_with_txtime(
-                  sockets_[query.socket_index_],
-                  reinterpret_cast<const void *>(query_data_), pkt_len, 0,
-                  reinterpret_cast<const struct sockaddr *>(&server_),
-                  sizeof(server_), txtime_ns)) != static_cast<ssize_t>(pkt_len)) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          std::cerr << "Can't send packet with SO_TXTIME." << std::endl;
-          break;
-        }
-      }
-    } else {
-      /* Fall back to regular sendto() */
-      while ((sent = ::sendto(sockets_[query.socket_index_],
-                              reinterpret_cast<const void *>(query_data_),
-                              pkt_len, 0,
-                              reinterpret_cast<const struct sockaddr *>(&server_),
-                              sizeof(server_))) !=
-             static_cast<ssize_t>(pkt_len)) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          std::cerr << "Can't send packet." << std::endl;
-          break;
-        }
+    /* Use SO_TXTIME for scheduling */
+    while ((sent = sendto_with_txtime(
+                sockets_[query.socket_index_],
+                reinterpret_cast<const void *>(query_data_), pkt_len, 0,
+                reinterpret_cast<const struct sockaddr *>(&server_),
+                sizeof(server_), txtime_ns)) != static_cast<ssize_t>(pkt_len)) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        std::cerr << "Can't send packet with SO_TXTIME." << std::endl;
+        break;
       }
     }
 
     /* Store the time */
-    query.time_sent_ = std::chrono::high_resolution_clock::now();
+    query.time_sent_ = std::chrono::time_point<std::chrono::high_resolution_clock>(
+        std::chrono::nanoseconds(txtime_ns));
     m_.lock();
     tx_to_query_[tx_id] = num_sent_;
     num_sent_++;
     m_.unlock();
 
-    /* Increment batch counter and sleep after batch_size packets */
+    /* Increment batch counter and sleep after batch_size queries */
     packets_in_batch++;
-    if (use_so_txtime_ && packets_in_batch >= batch_size_ && num_sent_ < num_req_) {
-      spinsleep::sleep_for(sleep_duration);
+    if (packets_in_batch >= batch_size_ && num_sent_ < num_req_) {
+      uint64_t current_tai_ns = get_clock_tai_ns();
+      uint64_t sleep_target_ns = txtime_ns - interval_ns_.count(); /*Wake up 1 query prior to the last send time*/
+      if (sleep_target_ns > current_tai_ns) {
+        uint64_t sleep_duration_ns = sleep_target_ns - current_tai_ns;
+        if (sleep_duration_ns >= min_sleep_ns_) {
+          struct timespec ts;
+          ts.tv_sec = sleep_duration_ns / 1000000000ULL;
+          ts.tv_nsec = sleep_duration_ns % 1000000000ULL;
+          nanosleep(&ts, nullptr);
+        } else {
+          spinsleep::sleep_for(std::chrono::nanoseconds(sleep_duration_ns));
+        }
+      }
       packets_in_batch = 0;
     }
+    txtime_ns += interval_ns_.count();  /* Increment Running count for next query */
   }
 }
 
@@ -419,9 +402,10 @@ inline void DnsTester::receive(uint16_t socket_index) {
   if ((recvlen = ::recvfrom(
            sockets_[socket_index], answer_data_.data(), answer_data_.size(), 0,
            reinterpret_cast<struct sockaddr *>(&sender), &sender_len)) > 0) {
-    /* Get the time of the receipt */
+    /* Get the time of the receipt (using CLOCK_TAI for consistency with SO_TXTIME) */
+    uint64_t time_received_ns = get_clock_tai_ns();
     std::chrono::high_resolution_clock::time_point time_received =
-        std::chrono::high_resolution_clock::now();
+        std::chrono::high_resolution_clock::time_point(std::chrono::nanoseconds(time_received_ns));
 /* Test whether the answer came from the DUT */
 #ifdef DNS64PERFPP_IPV4
     if (memcmp(reinterpret_cast<const void *>(&sender.sin_addr),
